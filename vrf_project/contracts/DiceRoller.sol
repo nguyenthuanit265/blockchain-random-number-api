@@ -24,8 +24,8 @@ contract DiceRoller is VRFConsumerBase {
         emit DiceRolled(requestId);
     }
 
-    function fulfillRandomness(bytes32 requestId, uint256 randomness) internal override {
-        randomResult = (randomness % 6) + 1; // Kết quả từ 1 đến 6
+    function fulfillRandomness(bytes32, /* requestId */ uint256 randomness) internal override {
+        randomResult = (randomness % 6) + 1; // random 1 -> 6
         emit DiceLanded(randomResult);
     }
 }
