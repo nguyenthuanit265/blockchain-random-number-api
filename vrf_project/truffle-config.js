@@ -1,3 +1,5 @@
+require('dotenv').config();
+const HDWalletProvider = require('@truffle/hdwallet-provider');
 /**
  * Use this file to configure your truffle project. It's seeded with some
  * common settings for different networks and features like migrations,
@@ -58,9 +60,11 @@ module.exports = {
    */
 
   networks: {
-    kovan: {
-      provider: () => new HDWalletProvider(process.env.PRIVATE_KEY, `https://kovan.infura.io/v3/${process.env.INFURA_API_KEY}`),
-      network_id: 42,
+    sepolia: {
+      provider: () => new HDWalletProvider(process.env.PRIVATE_KEY, `https://sepolia.infura.io/v3/${process.env.INFURA_API_KEY}`),
+      network_id: 11155111, // ID mạng Sepolia
+      gas: 6000000, // giới hạn gas
+      gasPrice: 20000000000, // giá gas (20 gwei)
       skipDryRun: true
     }
     // Useful for testing. The `development` name is special - truffle uses it by default

@@ -2,43 +2,43 @@ require('dotenv').config();
 const express = require('express');
 const { ethers } = require('ethers');
 
-// Khởi tạo ứng dụng Express
 const app = express();
-const port = 3000;
+const port = 4000;
 
-// Cấu hình kết nối đến Ethereum blockchain
-const provider = new ethers.providers.InfuraProvider('mainnet', process.env.INFURA_API_KEY);
+// Connect Sepolia by Infura
+const provider = new ethers.providers.InfuraProvider('sepolia', process.env.INFURA_API_KEY);
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 
-// ABI của hợp đồng VRF
+// ABI contract VRF
 const vrfAbi = [
-    // ABI của các hàm cần thiết
+  "function rollDice() public returns (bytes32 requestId)",
+  "event DiceRolled(bytes32 indexed requestId)",
+  "event DiceLanded(uint256 result)"
 ];
 
-// Địa chỉ hợp đồng VRF
+// Address contract VRF
 const vrfContractAddress = process.env.VRF_CONTRACT_ADDRESS;
-
-// Tạo đối tượng hợp đồng VRF
 const vrfContract = new ethers.Contract(vrfContractAddress, vrfAbi, wallet);
 
-// Endpoint để yêu cầu số ngẫu nhiên
-app.get('/random', async (req, res) => {
-    try {
-        // Gọi hàm yêu cầu số ngẫu nhiên từ hợp đồng
-        const tx = await vrfContract.requestRandomNumber();
-        const receipt = await tx.wait();
+// Endpoint
+app.get('/roll-dice', async (req, res) => {
+  try {
+    const tx = await vrfContract.rollDice();
+    const receipt = await tx.wait();
 
-        // Lấy kết quả từ sự kiện phát sinh trong giao dịch
-        const randomResult = receipt.events[0].args.randomNumber;
+    const requestId = receipt.events.find(event => event.event === 'DiceRolled').args.requestId;
 
-        res.json({ randomNumber: randomResult.toString() });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Có lỗi xảy ra khi yêu cầu số ngẫu nhiên' });
-    }
+    vrfContract.once('DiceLanded', (result) => {
+      res.json({ result: result.toString() });
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'erorr call func rollDice' });
+  }
 });
 
-// Khởi động máy chủ
+// Khởi động server
 app.listen(port, () => {
-    console.log(`API phát sinh số ngẫu nhiên đang chạy tại http://localhost:${port}`);
+  console.log(`API server running at http://localhost:${port}`);
 });
