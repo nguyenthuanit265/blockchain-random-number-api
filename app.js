@@ -1,44 +1,86 @@
-require('dotenv').config();
 const express = require('express');
-const { ethers } = require('ethers');
+const Web3 = require('web3');
+require('dotenv').config();
 
 const app = express();
 const port = 4000;
 
-// Connect Sepolia by Infura
-const provider = new ethers.providers.InfuraProvider('sepolia', process.env.INFURA_API_KEY);
-const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+// Connect to the Sepolia testnet using Infura
+const web3 = new Web3(new Web3.providers.HttpProvider(`https://sepolia.infura.io/v3/${process.env.INFURA_PROJECT_ID}`));
 
-// ABI contract VRF
-const vrfAbi = [
-  "function rollDice() public returns (bytes32 requestId)",
-  "event DiceRolled(bytes32 indexed requestId)",
-  "event DiceLanded(uint256 result)"
+// ABI of your deployed contract
+// const abi = [
+//     {
+//         "inputs": [],
+//         "name": "getRandomNumber",
+//         "outputs": [
+//             {
+//                 "internalType": "uint256",
+//                 "name": "",
+//                 "type": "uint256"
+//             }
+//         ],
+//         "stateMutability": "view",
+//         "type": "function"
+//     }
+// ];
+
+const abi = [
+	{
+		"inputs": [],
+		"name": "rollDice",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	}
 ];
 
-// Address contract VRF
-const vrfContractAddress = process.env.VRF_CONTRACT_ADDRESS;
-const vrfContract = new ethers.Contract(vrfContractAddress, vrfAbi, wallet);
+// Contract address
+const contractAddress = process.env.CONTRACT_ADDRESS;
+const contract = new web3.eth.Contract(abi, contractAddress);
 
-// Endpoint
+// Endpoint to get the random number
 app.get('/roll-dice', async (req, res) => {
-  try {
-    const tx = await vrfContract.rollDice();
-    const receipt = await tx.wait();
-
-    const requestId = receipt.events.find(event => event.event === 'DiceRolled').args.requestId;
-
-    vrfContract.once('DiceLanded', (result) => {
-      res.json({ result: result.toString() });
-    });
-
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'erorr call func rollDice' });
-  }
+    try {
+        const rollDiceResponse = await contract.methods.rollDice().call();
+        console.log("rollDiceResponse: ", rollDiceResponse);
+        res.json({ rollDiceResponse });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
-// Khởi động server
+// Endpoint to get block details
+app.get('/block/:blockNumber', async (req, res) => {
+    const blockNumber = req.params.blockNumber;
+    try {
+        const block = await web3.eth.getBlock(blockNumber);
+        console.log("blockNumber: ", blockNumber, " - ", "block: ", block);
+        res.json(block);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Endpoint to get the latest block number
+app.get('/latest-block', async (req, res) => {
+    try {
+        const latestBlockNumber = await web3.eth.getBlockNumber();
+        console.log("latestBlockNumber: ", latestBlockNumber);
+        res.json({ latestBlockNumber });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+
+// Start the server
 app.listen(port, () => {
-  console.log(`API server running at http://localhost:${port}`);
+    console.log(`Server is running on http://localhost:${port}`);
 });
