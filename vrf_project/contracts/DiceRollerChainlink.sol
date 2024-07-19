@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import "@chainlink/contracts/src/v0.8/vrf/VRFConsumerBase.sol";
 
-contract DiceRoller is VRFConsumerBase {
+contract DiceRollerChainlink is VRFConsumerBase {
     bytes32 internal keyHash;
     uint256 internal fee;
     uint256 public randomResult;

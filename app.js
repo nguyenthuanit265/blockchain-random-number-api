@@ -79,6 +79,29 @@ app.get('/latest-block', async (req, res) => {
     }
 });
 
+app.get('/fetch-blockchain', async (req, res) => {
+  const { startBlock, endBlock } = req.query;
+  const start = parseInt(startBlock, 10) || 0;
+  const end = parseInt(endBlock, 10) || (await web3.eth.getBlockNumber());
+  let blockchainData = [];
+
+  try {
+    for (let i = start; i <= end; i++) {
+      const block = await web3.eth.getBlock(i, true); // Fetch block with transaction details
+      blockchainData.push(block);
+
+      // Log progress
+      if (i % 10 == 0) {
+        console.log(`Fetched block ${i}`);
+      }
+    }
+
+    res.json(blockchainData);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 
 // Start the server
 app.listen(port, () => {
