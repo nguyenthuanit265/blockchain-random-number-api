@@ -4,6 +4,7 @@
     "@truffle/hdwallet-provider": "^2.1.15",
     "dotenv": "^16.4.5",
     "ethers": "^6.13.1",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "node-cache": "^5.1.2"
   }
 }
