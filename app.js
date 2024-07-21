@@ -5,10 +5,11 @@ require('dotenv').config();
 const NodeCache = require('node-cache');
 const WebSocket = require('ws');
 const EventEmitter = require('events');
+const rateLimit = require('express-rate-limit');
 
 
 const app = express();
-const port = 4000;
+const port = 4001;
 const abi = [
   {
     "anonymous": false,
@@ -66,6 +67,12 @@ const account = process.env.ACCOUNT_ADDRESS;
 const privateKey = process.env.PRIVATE_KEY;
 
 const cache = new NodeCache({ stdTTL: 600 }); // Cache for 10 minutes
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // limit each IP to 100 requests per windowMs
+});
+
+app.use(limiter);
 
 // Function to process transaction in the background
 async function processTransaction(txHash, txId) {
@@ -161,35 +168,58 @@ app.get('/block/:blockNumber', async (req, res) => {
   }
 });
 
-// New endpoint to get all rollDice blocks and transactions
 app.get('/roll-dice-history', async (req, res) => {
   try {
-    // Get all DiceRolled events
-    const events = await contract.getPastEvents('DiceRolled', {
-      fromBlock: 0,
-      toBlock: 'latest'
-    });
+      const page = parseInt(req.query.page) || 1;
+      const pageSize = parseInt(req.query.pageSize) || 10;
 
-    // Process events to get block and transaction details
-    const rollDiceHistory = await Promise.all(events.map(async (event) => {
-      const block = await web3.eth.getBlock(event.blockNumber);
-      const transaction = await web3.eth.getTransaction(event.transactionHash);
+      const cacheKey = `rollDiceBlocks_${page}_${pageSize}`;
+      const cachedResult = cache.get(cacheKey);
 
-      return {
-        blockNumber: event.blockNumber,
-        blockHash: block.hash,
-        blockTimestamp: new Date(block.timestamp * 1000).toISOString(),
-        transactionHash: event.transactionHash,
-        from: transaction.from,
-        to: transaction.to,
-        rollResult: event.returnValues.result
+      if (cachedResult) {
+          return res.json(cachedResult);
+      }
+
+      // Get all DiceRolled events
+      const events = await contract.getPastEvents('DiceRolled', {
+          fromBlock: 0,
+          toBlock: 'latest'
+      });
+
+      // Sort events by block number in descending order
+      events.sort((a, b) => b.blockNumber - a.blockNumber);
+
+      // Calculate start and end index for pagination
+      const startIndex = (page - 1) * pageSize;
+      const endIndex = startIndex + pageSize;
+
+      // Slice the events array for pagination
+      const paginatedEvents = events.slice(startIndex, endIndex);
+
+      // Fetch block details for paginated events
+      const rollDiceBlocks = await Promise.all(paginatedEvents.map(async (event) => {
+          const block = await web3.eth.getBlock(event.blockNumber);
+          return {
+              blockNumber: event.blockNumber,
+              blockHash: block.hash,
+              blockTimestamp: new Date(block.timestamp * 1000).toISOString(),
+              transactionHash: event.transactionHash,
+              rollResult: event.returnValues.result
+          };
+      }));
+
+      const result = {
+          blocks: rollDiceBlocks,
+          page,
+          pageSize,
+          totalEvents: events.length
       };
-    }));
 
-    res.json(rollDiceHistory);
+      cache.set(cacheKey, result);
+      res.json(result);
   } catch (error) {
-    console.error('Error fetching roll dice history:', error);
-    res.status(500).json({ error: error.message });
+      console.error('Error fetching roll dice blocks:', error);
+      res.status(500).json({ error: error.message });
   }
 });
 
