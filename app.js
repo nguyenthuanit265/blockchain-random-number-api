@@ -1,30 +1,14 @@
 const express = require('express');
 const Web3 = require('web3');
+
 require('dotenv').config();
 const NodeCache = require('node-cache');
+const WebSocket = require('ws');
+const EventEmitter = require('events');
+
 
 const app = express();
 const port = 4000;
-
-// Connect to the Sepolia testnet using Infura
-const web3 = new Web3(new Web3.providers.HttpProvider(`https://sepolia.infura.io/v3/${process.env.INFURA_PROJECT_ID}`));
-
-//const abi = [
-//	{
-//		"inputs": [],
-//		"name": "rollDice",
-//		"outputs": [
-//			{
-//				"internalType": "uint256",
-//				"name": "",
-//				"type": "uint256"
-//			}
-//		],
-//		"stateMutability": "view",
-//		"type": "function"
-//	}
-//];
-
 const abi = [
   {
     "anonymous": false,
@@ -62,30 +46,51 @@ const abi = [
 
 // Contract address
 const contractAddress = process.env.CONTRACT_ADDRESS;
+
+// Set up WebSocket connection
+const wsProvider = new Web3.providers.WebsocketProvider(`wss://sepolia.infura.io/ws/v3/${process.env.INFURA_PROJECT_ID}`);
+const web3Ws = new Web3(wsProvider);
+
+const web3 = new Web3(new Web3.providers.HttpProvider(`https://sepolia.infura.io/v3/${process.env.INFURA_PROJECT_ID}`));
+
+
+// Create contract instances for both HTTP and WebSocket providers
 const contract = new web3.eth.Contract(abi, contractAddress);
+const contractWs = new web3Ws.eth.Contract(abi, contractAddress);
+
+// Set up event emitter for transaction results
+const txEventEmitter = new EventEmitter();
 
 // Unlock your account (Replace with your account and private key)
 const account = process.env.ACCOUNT_ADDRESS;
 const privateKey = process.env.PRIVATE_KEY;
 
-// Cache setup
-const cache = new NodeCache({ stdTTL: 600 }); // 10 minutes
+const cache = new NodeCache({ stdTTL: 600 }); // Cache for 10 minutes
 
-// Endpoint to get the random number
-//app.get('/roll-dice', async (req, res) => {
-//    try {
-//        const rollDiceResponse = await contract.methods.rollDice().call();
-//        console.log("rollDiceResponse: ", rollDiceResponse);
-//        res.json({ rollDiceResponse });
-//    } catch (error) {
-//        res.status(500).json({ error: error.message });
-//    }
-//});
+// Function to process transaction in the background
+async function processTransaction(txHash, txId) {
+  try {
+    const receipt = await web3.eth.getTransactionReceipt(txHash);
+    if (receipt) {
+      const event = receipt.logs.find(log => log.address.toLowerCase() === contractAddress.toLowerCase());
+      if (event) {
+        const eventAbi = contract.options.jsonInterface.find((e) => e.name === 'DiceRolled' && e.type === 'event');
+        const decodedEvent = web3.eth.abi.decodeLog(eventAbi.inputs, event.data, event.topics.slice(1));
+        cache.set(txId, { status: 'completed', result: decodedEvent.result });
+      }
+    } else {
+      setTimeout(() => processTransaction(txHash, txId), 5000); // Retry after 5 seconds
+    }
+  } catch (error) {
+    console.error('Error processing transaction:', error);
+    cache.set(txId, { status: 'error', message: error.message });
+  }
+}
 
 // Endpoint to roll dice
 app.get('/roll-dice', async (req, res) => {
   try {
-    const tx = contract.methods.rollDice();
+    const tx = contractWs.methods.rollDice();
     const gas = await tx.estimateGas({ from: account });
     const gasPrice = await web3.eth.getGasPrice();
     const data = tx.encodeABI();
@@ -103,30 +108,46 @@ app.get('/roll-dice', async (req, res) => {
       privateKey
     );
 
+    // Generate a unique ID for this transaction
+    const txId = web3.utils.sha3(Date.now().toString() + account);
+
+    // Send the transaction
     web3.eth.sendSignedTransaction(signedTx.rawTransaction)
-      .on('receipt', async (receipt) => {
-
-        console.log("sendSignedTransaction - receipt: ", receipt);
-        // Decode event logs to get the dice roll result
-        const eventAbi = contract.options.jsonInterface.find((e) => e.name === 'DiceRolled' && e.type === 'event');
-        const event = receipt.logs.find(log => log.address.toLowerCase() === contractAddress.toLowerCase());
-
-        if (event) {
-          const decodedEvent = web3.eth.abi.decodeLog(eventAbi.inputs, event.data, event.topics.slice(1));
-          res.json({ rollDiceResponse: decodedEvent.result, receiptFromSignedTransaction: receipt });
-        } else {
-          res.status(500).json({ error: "Event not found in transaction receipt" });
-        }
+      .on('transactionHash', (hash) => {
+        cache.set(txId, { status: 'pending', hash });
+        processTransaction(hash, txId); // Start processing in background
+        // Respond immediately with the transaction hash
+        res.json({ txId, transactionHash: hash, message: "Transaction submitted. Waiting for confirmation." });
       })
+      // .on('receipt', (receipt) => {
+      //   const event = receipt.logs.find(log => log.address.toLowerCase() === contractAddress.toLowerCase());
+      //   if (event) {
+      //     const eventAbi = contract.options.jsonInterface.find((e) => e.name === 'DiceRolled' && e.type === 'event');
+      //     const decodedEvent = web3.eth.abi.decodeLog(eventAbi.inputs, event.data, event.topics.slice(1));
+      //     cache.set(txId, { status: 'completed', result: decodedEvent.result, receipt });
+      //   }
+      // })
       .on('error', (error) => {
-        res.status(500).json({ error: error.message });
+        cache.set(txId, { status: 'error', message: error.message });
       });
-
 
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
+
+// Endpoint to get the result of a specific transaction
+app.get('/roll-dice-result/:txId', (req, res) => {
+  const txId = req.params.txId;
+  const result = cache.get(txId);
+
+  if (result) {
+    res.json(result);
+  } else {
+    res.status(404).json({ message: "Transaction not found or expired from cache" });
+  }
+});
+
 
 // Endpoint to get block details
 app.get('/block/:blockNumber', async (req, res) => {
@@ -140,36 +161,34 @@ app.get('/block/:blockNumber', async (req, res) => {
   }
 });
 
-// Endpoint to fetch blocks containing rollDice transactions with pagination
-app.get('/fetch-roll-dice-blocks', async (req, res) => {
-  // const page = parseInt(req.query.page) || 1;
-  // const pageSize = parseInt(req.query.pageSize) || 1000; // Fetch 1000 blocks at a time
-
+// New endpoint to get all rollDice blocks and transactions
+app.get('/roll-dice-history', async (req, res) => {
   try {
-    // const cacheKey = `events_${page}_${pageSize}`;
-    // if (cache.has(cacheKey)) {
-    //   return res.json(cache.get(cacheKey));
-    // }
-
+    // Get all DiceRolled events
     const events = await contract.getPastEvents('DiceRolled', {
       fromBlock: 0,
       toBlock: 'latest'
     });
 
-    const blocks = new Set();
-    for (let event of events) {
-      blocks.add(event.blockNumber);
-    }
+    // Process events to get block and transaction details
+    const rollDiceHistory = await Promise.all(events.map(async (event) => {
+      const block = await web3.eth.getBlock(event.blockNumber);
+      const transaction = await web3.eth.getTransaction(event.transactionHash);
 
-    const blockData = [];
-    for (let blockNumber of blocks) {
-      const block = await web3.eth.getBlock(blockNumber, true); // Fetch block with transaction details
-      blockData.push(block);
-    }
+      return {
+        blockNumber: event.blockNumber,
+        blockHash: block.hash,
+        blockTimestamp: new Date(block.timestamp * 1000).toISOString(),
+        transactionHash: event.transactionHash,
+        from: transaction.from,
+        to: transaction.to,
+        rollResult: event.returnValues.result
+      };
+    }));
 
-    // cache.set(cacheKey, blockData);
-    res.json(blockData);
+    res.json(rollDiceHistory);
   } catch (error) {
+    console.error('Error fetching roll dice history:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -178,3 +197,11 @@ app.get('/fetch-roll-dice-blocks', async (req, res) => {
 app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);
 });
+
+// Set up WebSocket event listener
+contractWs.events.DiceRolled()
+  .on('data', (event) => {
+    console.log('Dice rolled:', event.returnValues.result);
+    // You can add additional logic here to handle the event
+  })
+  .on('error', console.error);
