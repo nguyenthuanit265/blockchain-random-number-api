@@ -67,6 +67,7 @@ const account = process.env.ACCOUNT_ADDRESS;
 const privateKey = process.env.PRIVATE_KEY;
 
 const cache = new NodeCache({ stdTTL: 30 }); // Cache for 30s
+const cacheTransaction = new NodeCache({ stdTTL: 600 }); // Cache for 30s
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100 // limit each IP to 100 requests per windowMs
@@ -83,14 +84,14 @@ async function processTransaction(txHash, txId) {
       if (event) {
         const eventAbi = contract.options.jsonInterface.find((e) => e.name === 'DiceRolled' && e.type === 'event');
         const decodedEvent = web3.eth.abi.decodeLog(eventAbi.inputs, event.data, event.topics.slice(1));
-        cache.set(txId, { status: 'completed', result: decodedEvent.result });
+        cacheTransaction.set(txId, { status: 'completed', result: decodedEvent.result });
       }
     } else {
       setTimeout(() => processTransaction(txHash, txId), 5000); // Retry after 5 seconds
     }
   } catch (error) {
     console.error('Error processing transaction:', error);
-    cache.set(txId, { status: 'error', message: error.message });
+    cacheTransaction.set(txId, { status: 'error', message: error.message });
   }
 }
 
@@ -121,7 +122,7 @@ app.get('/roll-dice', async (req, res) => {
     // Send the transaction
     web3.eth.sendSignedTransaction(signedTx.rawTransaction)
       .on('transactionHash', (hash) => {
-        cache.set(txId, { status: 'pending', hash });
+        cacheTransaction.set(txId, { status: 'pending', hash });
         processTransaction(hash, txId); // Start processing in background
         // Respond immediately with the transaction hash
         res.json({ txId, transactionHash: hash, message: "Transaction submitted. Waiting for confirmation." });
@@ -135,7 +136,7 @@ app.get('/roll-dice', async (req, res) => {
       //   }
       // })
       .on('error', (error) => {
-        cache.set(txId, { status: 'error', message: error.message });
+        cacheTransaction.set(txId, { status: 'error', message: error.message });
       });
 
   } catch (error) {
@@ -146,7 +147,7 @@ app.get('/roll-dice', async (req, res) => {
 // Endpoint to get the result of a specific transaction
 app.get('/roll-dice-result/:txId', (req, res) => {
   const txId = req.params.txId;
-  const result = cache.get(txId);
+  const result = cacheTransaction.get(txId);
 
   if (result) {
     res.json(result);
